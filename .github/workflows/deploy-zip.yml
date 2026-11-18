@@ -1,0 +1,80 @@
+
+name: Deploy CLEARFRAME AI from ZIP
+
+on:
+  push:
+    paths:
+      - "incoming/**/*.zip"
+      - "incoming/*.zip"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Find ZIP
+        id: archive
+        run: |
+          ZIP=$(find incoming -type f -name '*.zip' -print -quit)
+          if [ -z "$ZIP" ]; then
+            echo "No ZIP found in incoming/"
+            exit 1
+          fi
+          echo "file=$ZIP" >> "$GITHUB_OUTPUT"
+
+      - name: Extract project
+        run: |
+          mkdir -p app
+          ZIP="${{ steps.archive.outputs.file }}"
+          if unzip -Z1 "$ZIP" | grep -E '(^/|(^|/)\.\.(/|$))'; then
+            echo "Unsafe ZIP path"
+            exit 1
+          fi
+          unzip -q "$ZIP" -d app
+          test -f app/package.json || {
+            echo "package.json must be at ZIP root"
+            exit 1
+          }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install and build
+        working-directory: app
+        env:
+          GITHUB_PAGES: "true"
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+          npm run build
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: app/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
